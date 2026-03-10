@@ -9,6 +9,7 @@ class TrackedAddress extends Model
 {
     protected $fillable = [
         'address',
+        'chain',
         'label',
         'is_active',
         'last_synced_block',
@@ -17,10 +18,10 @@ class TrackedAddress extends Model
     ];
 
     protected $casts = [
-        'is_active'        => 'boolean',
-        'last_synced_block' => 'integer',
-        'last_synced_at'   => 'datetime',
-        'meta'             => 'array',
+        'is_active'         => 'boolean',
+        'last_synced_block'  => 'integer',
+        'last_synced_at'    => 'datetime',
+        'meta'              => 'array',
     ];
 
     public function getTable(): string
@@ -30,7 +31,18 @@ class TrackedAddress extends Model
 
     public function transactions(): HasMany
     {
-        return $this->hasMany(BscTransaction::class, 'tracked_address', 'address');
+        return $this->hasMany(ChainTransaction::class, 'tracked_address', 'address')
+                    ->where('chain', $this->chain);
+    }
+
+    public function getChainConfig(): array
+    {
+        return config('moralis.chains.' . $this->chain, []);
+    }
+
+    public function getNativeSymbol(): string
+    {
+        return $this->getChainConfig()['native_symbol'] ?? 'NATIVE';
     }
 
     public function scopeActive($query)

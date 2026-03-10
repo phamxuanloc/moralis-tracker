@@ -8,7 +8,6 @@ class MoralisClient
 {
     protected string $apiKey;
     protected string $baseUrl;
-    protected string $chain;
     protected int $maxRetries;
     protected int $limit;
 
@@ -16,54 +15,61 @@ class MoralisClient
     {
         $this->apiKey     = config('moralis.api_key', '');
         $this->baseUrl    = rtrim(config('moralis.base_url', 'https://deep-index.moralis.io/api/v2.2'), '/');
-        $this->chain      = config('moralis.chain', 'bsc');
         $this->maxRetries = (int) config('moralis.max_retries', 3);
         $this->limit      = (int) config('moralis.max_records_per_page', 100);
     }
 
     /**
-     * Fetch all native (BNB) transactions for an address (all pages).
+     * Resolve Moralis chain identifier from a config key (e.g. 'bsc', 'eth').
      */
-    public function getNormalTransactions(string $address, int $fromBlock = 0): array
+    protected function resolveChain(string $chain): string
     {
-        return $this->fetchAllPages("/{$address}", array_filter([
+        return config("moralis.chains.{$chain}.moralis_id", $chain);
+    }
+
+    /**
+     * Fetch all native transactions for an address on the given chain.
+     */
+    public function getNormalTransactions(string $address, string $chain, int $fromBlock = 0): array
+    {
+        return $this->fetchAllPages("/{$address}", $chain, array_filter([
             'from_block' => $fromBlock > 0 ? $fromBlock : null,
         ]));
     }
 
     /**
-     * Fetch all BEP-20 token transfers for an address (all pages).
+     * Fetch all ERC-20/BEP-20 token transfers for an address on the given chain.
      */
-    public function getTokenTransfers(string $address, int $fromBlock = 0): array
+    public function getTokenTransfers(string $address, string $chain, int $fromBlock = 0): array
     {
-        return $this->fetchAllPages("/{$address}/erc20/transfers", array_filter([
+        return $this->fetchAllPages("/{$address}/erc20/transfers", $chain, array_filter([
             'from_block' => $fromBlock > 0 ? $fromBlock : null,
         ]));
     }
 
     /**
-     * Fetch all NFT transfers for an address (all pages).
+     * Fetch all NFT transfers for an address on the given chain.
      */
-    public function getNftTransfers(string $address, int $fromBlock = 0): array
+    public function getNftTransfers(string $address, string $chain, int $fromBlock = 0): array
     {
-        return $this->fetchAllPages("/{$address}/nft/transfers", array_filter([
+        return $this->fetchAllPages("/{$address}/nft/transfers", $chain, array_filter([
             'from_block' => $fromBlock > 0 ? $fromBlock : null,
         ]));
     }
 
     /**
-     * Get native BNB balance for an address.
+     * Get native balance for an address on the given chain.
      */
-    public function getBalance(string $address): string
+    public function getBalance(string $address, string $chain): string
     {
-        $data = $this->request("/{$address}/balance");
+        $data = $this->request("/{$address}/balance", $chain);
         return $data['balance'] ?? '0';
     }
 
     /**
      * Paginate through all cursor pages and return a flat array of results.
      */
-    protected function fetchAllPages(string $path, array $extraParams = []): array
+    protected function fetchAllPages(string $path, string $chain, array $extraParams = []): array
     {
         $all    = [];
         $cursor = null;
@@ -74,7 +80,7 @@ class MoralisClient
                 $params['cursor'] = $cursor;
             }
 
-            $data   = $this->request($path, $params);
+            $data   = $this->request($path, $chain, $params);
             $result = $data['result'] ?? [];
 
             if (!empty($result)) {
@@ -91,9 +97,9 @@ class MoralisClient
     /**
      * Make a single HTTP GET request to the Moralis API with retry logic.
      */
-    protected function request(string $path, array $params = []): array
+    protected function request(string $path, string $chain, array $params = []): array
     {
-        $params['chain'] = $this->chain;
+        $params['chain'] = $this->resolveChain($chain);
         $url = $this->baseUrl . $path . '?' . http_build_query($params);
 
         $attempt       = 0;

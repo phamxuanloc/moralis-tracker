@@ -8,13 +8,14 @@ return new class extends Migration
 {
     public function up(): void
     {
-        $tableName = config('moralis.table_names.bsc_transactions', 'bsc_transactions');
+        $tableName = config('moralis.table_names.chain_transactions', 'chain_transactions');
 
         Schema::create($tableName, function (Blueprint $table) {
             $table->id();
 
             $table->string('tx_hash', 66)->comment('Transaction hash');
-            $table->string('type', 20)->default('normal')->comment('normal|internal|token|nft');
+            $table->string('type', 20)->default('normal')->comment('normal|token|nft');
+            $table->string('chain', 30)->default('bsc')->comment('Chain key: bsc, eth, polygon, etc.');
 
             $table->string('tracked_address', 42)->comment('The address being tracked');
             $table->unsignedBigInteger('block_number');
@@ -24,13 +25,13 @@ return new class extends Migration
             $table->string('from_address', 42)->nullable();
             $table->string('to_address', 42)->nullable();
 
-            $table->string('value', 78)->default('0')->comment('Value in wei');
-            $table->decimal('value_bnb', 30, 18)->default(0)->comment('Value in BNB');
+            $table->string('value', 78)->default('0')->comment('Value in smallest unit (wei)');
+            $table->decimal('value_native', 30, 18)->default(0)->comment('Value in native currency (ETH/BNB/MATIC...)');
 
             $table->string('gas', 20)->nullable();
             $table->string('gas_price', 30)->nullable();
             $table->string('gas_used', 20)->nullable();
-            $table->decimal('tx_fee_bnb', 30, 18)->default(0)->comment('Fee in BNB');
+            $table->decimal('tx_fee_native', 30, 18)->default(0)->comment('Fee in native currency');
 
             $table->string('nonce', 20)->nullable();
             $table->text('input')->nullable()->comment('Input data / method call');
@@ -42,10 +43,11 @@ return new class extends Migration
             $table->string('token_symbol', 30)->nullable();
             $table->unsignedInteger('token_decimal')->nullable();
 
-            $table->json('raw_data')->nullable()->comment('Full raw response from BscScan');
+            $table->json('raw_data')->nullable()->comment('Full raw response from Moralis');
             $table->timestamps();
 
-            $table->unique(['tx_hash', 'type', 'tracked_address'], 'unique_tx_per_address');
+            $table->unique(['tx_hash', 'type', 'chain', 'tracked_address'], 'unique_tx_per_chain_address');
+            $table->index('chain');
             $table->index('tracked_address');
             $table->index('block_number');
             $table->index('from_address');
@@ -57,7 +59,7 @@ return new class extends Migration
 
     public function down(): void
     {
-        $tableName = config('moralis.table_names.bsc_transactions', 'bsc_transactions');
+        $tableName = config('moralis.table_names.chain_transactions', 'chain_transactions');
         Schema::dropIfExists($tableName);
     }
 };

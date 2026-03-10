@@ -60,7 +60,8 @@ class MoralisServiceProvider extends ServiceProvider
 
     protected function seedAddressesFromConfig(): void
     {
-        $addresses = config('moralis.addresses', []);
+        $addresses    = config('moralis.addresses', []);
+        $defaultChain = config('moralis.default_chain', 'bsc');
 
         if (empty($addresses)) {
             return;
@@ -74,7 +75,7 @@ class MoralisServiceProvider extends ServiceProvider
                 }
 
                 \Locpx\MoralisTracker\Models\TrackedAddress::firstOrCreate(
-                    ['address' => $address],
+                    ['address' => $address, 'chain' => $defaultChain],
                     ['is_active' => true]
                 );
             }

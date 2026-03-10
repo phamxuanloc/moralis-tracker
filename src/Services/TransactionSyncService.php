@@ -4,7 +4,7 @@ namespace Locpx\MoralisTracker\Services;
 
 use Illuminate\Support\Facades\Log;
 use Locpx\MoralisTracker\MoralisClient;
-use Locpx\MoralisTracker\Models\BscTransaction;
+use Locpx\MoralisTracker\Models\ChainTransaction;
 use Locpx\MoralisTracker\Models\TrackedAddress;
 
 class TransactionSyncService
@@ -19,23 +19,30 @@ class TransactionSyncService
     }
 
     /**
-     * Sync all active tracked addresses.
+     * Sync all active tracked addresses (all chains).
+     * Optionally filter to a specific chain key (e.g. 'bsc', 'eth').
      *
      * @return array{synced: int, new: int, errors: int}
      */
-    public function syncAll(): array
+    public function syncAll(?string $chain = null): array
     {
         $totals = ['synced' => 0, 'new' => 0, 'errors' => 0];
 
-        TrackedAddress::active()->each(function (TrackedAddress $address) use (&$totals) {
+        $query = TrackedAddress::active();
+        if ($chain) {
+            $query->where('chain', $chain);
+        }
+
+        $query->each(function (TrackedAddress $tracked) use (&$totals) {
             try {
-                $result = $this->syncAddress($address);
+                $result = $this->syncAddress($tracked);
                 $totals['synced']++;
                 $totals['new'] += $result['new'];
             } catch (\Throwable $e) {
                 $totals['errors']++;
-                Log::channel($this->logChannel)->error('[MoralisTracker] Sync failed for address', [
-                    'address' => $address->address,
+                Log::channel($this->logChannel)->error('[MoralisTracker] Sync failed', [
+                    'address' => $tracked->address,
+                    'chain'   => $tracked->chain,
                     'error'   => $e->getMessage(),
                 ]);
             }
@@ -45,44 +52,54 @@ class TransactionSyncService
     }
 
     /**
-     * Sync a single TrackedAddress model.
+     * Sync a single TrackedAddress model (uses its own chain).
      *
      * @return array{new: int, highestBlock: int}
      */
     public function syncAddress(TrackedAddress $trackedAddress): array
     {
-        return $this->syncByAddress($trackedAddress->address, $trackedAddress->last_synced_block, $trackedAddress);
+        return $this->syncByAddress(
+            $trackedAddress->address,
+            $trackedAddress->chain,
+            $trackedAddress->last_synced_block,
+            $trackedAddress
+        );
     }
 
     /**
-     * Sync transactions for a raw address string.
+     * Sync transactions for a raw address + chain string.
      * Optionally updates the TrackedAddress record's last_synced_block.
      *
      * @return array{new: int, highestBlock: int}
      */
-    public function syncByAddress(string $address, int $startBlock = 0, ?TrackedAddress $trackedAddress = null): array
-    {
+    public function syncByAddress(
+        string $address,
+        string $chain,
+        int $startBlock = 0,
+        ?TrackedAddress $trackedAddress = null
+    ): array {
         $address    = strtolower($address);
         $startBlock = max(0, $startBlock);
-        $types      = config('moralis.transaction_types', ['normal', 'token', 'nft']);
+        $types      = config("moralis.chains.{$chain}.transaction_types", ['normal', 'token', 'nft']);
 
         $newCount     = 0;
         $highestBlock = $startBlock;
 
         Log::channel($this->logChannel)->info('[MoralisTracker] Starting sync', [
             'address'    => $address,
+            'chain'      => $chain,
             'startBlock' => $startBlock,
             'types'      => $types,
         ]);
 
         foreach ($types as $type) {
-            $raw = $this->fetchRaw($type, $address, $startBlock);
+            $raw = $this->fetchRaw($type, $address, $chain, $startBlock);
 
             if (empty($raw)) {
                 continue;
             }
 
-            $inserted = $this->upsertTransactions($address, $type, $raw);
+            $inserted = $this->upsertTransactions($address, $chain, $type, $raw);
             $newCount += $inserted;
 
             $blockInBatch = (int) (end($raw)['block_number'] ?? 0);
@@ -92,6 +109,7 @@ class TransactionSyncService
 
             Log::channel($this->logChannel)->info('[MoralisTracker] Synced batch', [
                 'address' => $address,
+                'chain'   => $chain,
                 'type'    => $type,
                 'fetched' => count($raw),
                 'new'     => $inserted,
@@ -106,41 +124,42 @@ class TransactionSyncService
     }
 
     /**
-     * Call the appropriate MoralisClient method based on type.
+     * Call the appropriate MoralisClient method based on type + chain.
      */
-    protected function fetchRaw(string $type, string $address, int $startBlock): array
+    protected function fetchRaw(string $type, string $address, string $chain, int $startBlock): array
     {
         return match ($type) {
-            'normal' => $this->client->getNormalTransactions($address, $startBlock),
-            'token'  => $this->client->getTokenTransfers($address, $startBlock),
-            'nft'    => $this->client->getNftTransfers($address, $startBlock),
+            'normal' => $this->client->getNormalTransactions($address, $chain, $startBlock),
+            'token'  => $this->client->getTokenTransfers($address, $chain, $startBlock),
+            'nft'    => $this->client->getNftTransfers($address, $chain, $startBlock),
             default  => [],
         };
     }
 
     /**
-     * Map raw Moralis records to DB rows and upsert. Returns count of new inserts.
+     * Map raw Moralis records to DB rows and upsert. Returns count of truly new inserts.
      */
-    protected function upsertTransactions(string $trackedAddress, string $type, array $rawList): int
-    {
+    protected function upsertTransactions(
+        string $trackedAddress,
+        string $chain,
+        string $type,
+        array $rawList
+    ): int {
         $rows = [];
 
         foreach ($rawList as $raw) {
-            // Moralis uses 'hash' for normal txs, 'transaction_hash' for token/nft transfers
             $txHash   = strtolower($raw['hash'] ?? $raw['transaction_hash'] ?? '');
             $weiValue = (string) ($raw['value'] ?? '0');
             $gasPrice = (string) ($raw['gas_price'] ?? '0');
             $gasUsed  = (string) ($raw['receipt_gas_used'] ?? '0');
 
-            $valueBnb = $this->weiToBnb($weiValue);
-            $feeBnb   = $this->weiToBnb(bcmul($gasPrice, $gasUsed, 0));
+            $valueNative = $this->weiToNative($weiValue);
+            $feeNative   = $this->weiToNative(bcmul($gasPrice, $gasUsed, 0));
 
-            // Moralis block_timestamp is ISO-8601: "2021-04-02T10:07:54.000Z"
             $blockTs = isset($raw['block_timestamp'])
                 ? date('Y-m-d H:i:s', strtotime($raw['block_timestamp']))
                 : null;
 
-            // token contract address differs by type
             $contractAddress = strtolower(
                 $raw['address'] ?? $raw['token_address'] ?? $raw['contract_address'] ?? ''
             );
@@ -152,6 +171,7 @@ class TransactionSyncService
             $rows[] = [
                 'tx_hash'           => $txHash,
                 'type'              => $type,
+                'chain'             => $chain,
                 'tracked_address'   => $trackedAddress,
                 'block_number'      => (int) ($raw['block_number'] ?? 0),
                 'block_timestamp'   => $blockTs,
@@ -159,11 +179,11 @@ class TransactionSyncService
                 'from_address'      => strtolower($raw['from_address'] ?? ''),
                 'to_address'        => strtolower($raw['to_address'] ?? ''),
                 'value'             => $weiValue,
-                'value_bnb'         => $valueBnb,
+                'value_native'      => $valueNative,
                 'gas'               => $raw['gas'] ?? null,
                 'gas_price'         => $gasPrice,
                 'gas_used'          => $gasUsed,
-                'tx_fee_bnb'        => $feeBnb,
+                'tx_fee_native'     => $feeNative,
                 'nonce'             => $raw['nonce'] ?? null,
                 'input'             => $raw['input'] ?? null,
                 'is_error'          => $isError,
@@ -182,8 +202,9 @@ class TransactionSyncService
             return 0;
         }
 
-        $existingHashes = BscTransaction::query()
+        $existingHashes = ChainTransaction::query()
             ->where('tracked_address', $trackedAddress)
+            ->where('chain', $chain)
             ->where('type', $type)
             ->whereIn('tx_hash', array_column($rows, 'tx_hash'))
             ->pluck('tx_hash')
@@ -195,14 +216,13 @@ class TransactionSyncService
             array_filter($rows, fn($r) => !isset($existingHashes[$r['tx_hash']]))
         );
 
-        // Upsert all rows: insert new ones, update existing ones
-        BscTransaction::upsert(
+        ChainTransaction::upsert(
             array_values($rows),
-            ['tx_hash', 'type', 'tracked_address'],
+            ['tx_hash', 'type', 'chain', 'tracked_address'],
             [
                 'block_number', 'block_timestamp', 'transaction_index',
-                'from_address', 'to_address', 'value', 'value_bnb',
-                'gas', 'gas_price', 'gas_used', 'tx_fee_bnb',
+                'from_address', 'to_address', 'value', 'value_native',
+                'gas', 'gas_price', 'gas_used', 'tx_fee_native',
                 'nonce', 'input', 'is_error', 'tx_receipt_status',
                 'contract_address', 'token_name', 'token_symbol', 'token_decimal',
                 'raw_data', 'updated_at',
@@ -212,12 +232,13 @@ class TransactionSyncService
         foreach ($newRows as $row) {
             Log::channel($this->logChannel)->info('[MoralisTracker] New transaction saved', [
                 'address' => $trackedAddress,
+                'chain'   => $chain,
                 'type'    => $type,
                 'hash'    => $row['tx_hash'],
                 'block'   => $row['block_number'],
                 'from'    => $row['from_address'],
                 'to'      => $row['to_address'],
-                'bnb'     => $row['value_bnb'],
+                'value'   => $row['value_native'],
             ]);
         }
 
@@ -225,9 +246,9 @@ class TransactionSyncService
     }
 
     /**
-     * Convert a wei string to BNB (18 decimals) using bcmath.
+     * Convert a wei string to native currency (18 decimals) using bcmath.
      */
-    protected function weiToBnb(string $wei): string
+    protected function weiToNative(string $wei): string
     {
         if (!is_numeric($wei) || $wei === '0') {
             return '0';

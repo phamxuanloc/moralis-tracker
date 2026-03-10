@@ -10,42 +10,45 @@ class SyncTransactions extends Command
 {
     protected $signature = 'moralis:sync
                             {--address= : Sync a specific address (overrides DB list)}
+                            {--chain= : Chain to sync (bsc, eth, polygon, etc.). Defaults to all active chains}
                             {--from-block=0 : Start syncing from this block number}
-                            {--type=* : Transaction types to sync (normal, token, nft)}
                             {--fresh : Ignore last_synced_block and sync from --from-block}';
 
-    protected $description = 'Sync BSC transactions via Moralis API and store them in the database';
+    protected $description = 'Sync transactions via Moralis API for tracked addresses (multi-chain)';
 
     public function handle(TransactionSyncService $service): int
     {
-        $this->info('[MoralisTracker] Starting transaction sync...');
-
         $specificAddress = $this->option('address');
+        $chain           = $this->option('chain') ?: null;
         $fromBlock       = (int) $this->option('from-block');
         $fresh           = $this->option('fresh');
 
+        $chainLabel = $chain ? "[{$chain}]" : '[all chains]';
+        $this->info("[MoralisTracker] Starting sync {$chainLabel}...");
+
         if ($specificAddress) {
-            return $this->syncSingleAddress($service, $specificAddress, $fromBlock, $fresh);
+            $chain = $chain ?: config('moralis.default_chain', 'bsc');
+            return $this->syncSingleAddress($service, $specificAddress, $chain, $fromBlock, $fresh);
         }
 
-        return $this->syncAllAddresses($service, $fromBlock, $fresh);
+        return $this->syncAllAddresses($service, $chain, $fromBlock, $fresh);
     }
 
-    protected function syncSingleAddress(TransactionSyncService $service, string $address, int $fromBlock, bool $fresh): int
+    protected function syncSingleAddress(TransactionSyncService $service, string $address, string $chain, int $fromBlock, bool $fresh): int
     {
         $address = strtolower($address);
-        $tracked = TrackedAddress::where('address', $address)->first();
+        $tracked = TrackedAddress::where('address', $address)->where('chain', $chain)->first();
 
         $startBlock = $fromBlock;
         if (!$fresh && $tracked && $tracked->last_synced_block > 0) {
             $startBlock = $tracked->last_synced_block;
         }
 
-        $this->line("  → Syncing address: <comment>{$address}</comment> from block <comment>{$startBlock}</comment>");
+        $this->line("  → <comment>{$address}</comment> on <info>{$chain}</info> from block <comment>{$startBlock}</comment>");
 
         try {
-            $result = $service->syncByAddress($address, $startBlock, $tracked);
-            $this->info("  ✔ Done. New transactions: <comment>{$result['new']}</comment> | Highest block: <comment>{$result['highestBlock']}</comment>");
+            $result = $service->syncByAddress($address, $chain, $startBlock, $tracked);
+            $this->info("  ✔ New: <comment>{$result['new']}</comment> | Top block: <comment>{$result['highestBlock']}</comment>");
         } catch (\Throwable $e) {
             $this->error("  ✘ Failed: " . $e->getMessage());
             return self::FAILURE;
@@ -54,12 +57,16 @@ class SyncTransactions extends Command
         return self::SUCCESS;
     }
 
-    protected function syncAllAddresses(TransactionSyncService $service, int $fromBlock, bool $fresh): int
+    protected function syncAllAddresses(TransactionSyncService $service, ?string $chain, int $fromBlock, bool $fresh): int
     {
-        $addresses = TrackedAddress::active()->get();
+        $query = TrackedAddress::active();
+        if ($chain) {
+            $query->where('chain', $chain);
+        }
+        $addresses = $query->get();
 
         if ($addresses->isEmpty()) {
-            $this->warn('[MoralisTracker] No active tracked addresses found. Add addresses via `moralis:add-address` or set MORALIS_ADDRESSES in .env.');
+            $this->warn('[MoralisTracker] No active tracked addresses found. Use `moralis:add-address` or set MORALIS_ADDRESSES in .env.');
             return self::SUCCESS;
         }
 
@@ -75,10 +82,10 @@ class SyncTransactions extends Command
             }
 
             $label = $tracked->label ? " ({$tracked->label})" : '';
-            $this->line("  → <comment>{$tracked->address}</comment>{$label} from block <comment>{$startBlock}</comment>");
+            $this->line("  → <comment>{$tracked->address}</comment>{$label} [<info>{$tracked->chain}</info>] from block <comment>{$startBlock}</comment>");
 
             try {
-                $result = $service->syncByAddress($tracked->address, $startBlock, $tracked);
+                $result = $service->syncByAddress($tracked->address, $tracked->chain, $startBlock, $tracked);
                 $totalNew += $result['new'];
                 $this->line("      New: <info>{$result['new']}</info> | Top block: <info>{$result['highestBlock']}</info>");
             } catch (\Throwable $e) {

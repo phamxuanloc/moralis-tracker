@@ -19,30 +19,70 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Moralis Chain Identifier
+    | Default Chain
     |--------------------------------------------------------------------------
-    | BSC Mainnet: bsc | BSC Testnet: 0x61
+    | Used when no --chain option is passed to artisan commands, and for
+    | addresses seeded via MORALIS_ADDRESSES in .env.
+    | Must match a key in the 'chains' array below.
     */
-    'chain' => env('MORALIS_CHAIN', 'bsc'),
+    'default_chain' => env('MORALIS_CHAIN', 'bsc'),
 
     /*
     |--------------------------------------------------------------------------
-    | Addresses to Track
+    | Supported Chains
     |--------------------------------------------------------------------------
-    | Comma-separated BSC wallet addresses. Can also be managed via the
-    | tracked_addresses database table.
+    | Add or remove chains here. 'moralis_id' is the identifier Moralis uses.
+    | 'native_symbol' is used for display / column naming in logs.
+    | 'transaction_types' controls what is fetched: normal, token, nft.
+    */
+    'chains' => [
+        'bsc' => [
+            'name'              => 'BNB Smart Chain',
+            'moralis_id'        => 'bsc',
+            'native_symbol'     => 'BNB',
+            'transaction_types' => ['normal', 'token', 'nft'],
+        ],
+        'eth' => [
+            'name'              => 'Ethereum',
+            'moralis_id'        => 'eth',
+            'native_symbol'     => 'ETH',
+            'transaction_types' => ['normal', 'token', 'nft'],
+        ],
+        'polygon' => [
+            'name'              => 'Polygon',
+            'moralis_id'        => 'polygon',
+            'native_symbol'     => 'MATIC',
+            'transaction_types' => ['normal', 'token', 'nft'],
+        ],
+        'arbitrum' => [
+            'name'              => 'Arbitrum One',
+            'moralis_id'        => 'arbitrum',
+            'native_symbol'     => 'ETH',
+            'transaction_types' => ['normal', 'token', 'nft'],
+        ],
+        'base' => [
+            'name'              => 'Base',
+            'moralis_id'        => 'base',
+            'native_symbol'     => 'ETH',
+            'transaction_types' => ['normal', 'token', 'nft'],
+        ],
+        'avalanche' => [
+            'name'              => 'Avalanche C-Chain',
+            'moralis_id'        => 'avalanche',
+            'native_symbol'     => 'AVAX',
+            'transaction_types' => ['normal', 'token', 'nft'],
+        ],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Addresses to Track (seeded from .env)
+    |--------------------------------------------------------------------------
+    | Comma-separated wallet addresses, tracked on the default_chain.
+    | To track on multiple chains, use the tracked_addresses table directly
+    | or the `moralis:add-address` command with --chain.
     */
     'addresses' => array_filter(explode(',', env('MORALIS_ADDRESSES', ''))),
-
-    /*
-    |--------------------------------------------------------------------------
-    | Transaction Types to Sync
-    |--------------------------------------------------------------------------
-    | normal - Regular BNB transactions
-    | token  - BEP-20 token transfers
-    | nft    - BEP-721 / BEP-1155 NFT transfers
-    */
-    'transaction_types' => ['normal', 'token', 'nft'],
 
     /*
     |--------------------------------------------------------------------------
@@ -68,8 +108,8 @@ return [
     |--------------------------------------------------------------------------
     */
     'table_names' => [
-        'tracked_addresses' => 'tracked_addresses',
-        'bsc_transactions'  => 'bsc_transactions',
+        'tracked_addresses'  => 'tracked_addresses',
+        'chain_transactions' => 'chain_transactions',
     ],
 
     /*
