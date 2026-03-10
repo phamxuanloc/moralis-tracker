@@ -31,24 +31,34 @@ function env_get(string $key, string $default = ''): string
 
 $API_KEY  = env_get('MORALIS_API_KEY');
 $BASE_URL = rtrim(env_get('MORALIS_BASE_URL', 'https://deep-index.moralis.io/api/v2.2'), '/');
-$CHAIN    = env_get('MORALIS_CHAIN', 'bsc');
 
-// Test address — Binance hot wallet (public, many txs)
-$TEST_ADDRESS = '0x60cd66c5BBFB0c0FA6891d5358036D2fD78Ac83D';
+// Chains to test: [chain_id => [label, native_symbol, test_address]]
+$CHAINS_TO_TEST = [
+    'bsc' => [
+        'label'         => 'BNB Smart Chain',
+        'native_symbol' => 'BNB',
+        'address'       => env_get('MORALIS_ADDRESSES', '0x60cd66c5BBFB0c0FA6891d5358036D2fD78Ac83D'),
+    ],
+    'eth' => [
+        'label'         => 'Ethereum',
+        'native_symbol' => 'ETH',
+        'address'       => '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045', // vitalik.eth (public)
+    ],
+];
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-function moralis_get(string $path, array $params = []): array
+function moralis_get(string $path, string $chain, array $params = []): array
 {
-    $params['chain'] = $GLOBALS['CHAIN'];
+    $params['chain'] = $chain;
     $url = $GLOBALS['BASE_URL'] . $path . '?' . http_build_query($params);
 
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT        => 20,
-        CURLOPT_USERAGENT      => 'BscScanTracker-Test/1.0',
+        CURLOPT_USERAGENT      => 'MoralisTracker-Test/1.0',
         CURLOPT_SSL_VERIFYPEER => true,
         CURLOPT_FOLLOWLOCATION => true,
         CURLOPT_HTTPHEADER     => [
@@ -76,7 +86,7 @@ function moralis_get(string $path, array $params = []): array
     return $decoded;
 }
 
-function wei_to_bnb(string $wei): string
+function wei_to_native(string $wei): string
 {
     if (!is_numeric($wei) || $wei === '0') return '0.00000000';
     return number_format((float) bcdiv($wei, bcpow('10', '18', 0), 18), 8);
@@ -89,14 +99,14 @@ function print_section(string $title): void
     echo str_repeat('=', 60) . "\n";
 }
 
-function print_ok(string $msg): void  { echo "  ✔  \033[32m{$msg}\033[0m\n"; }
-function print_err(string $msg): void { echo "  ✘  \033[31m{$msg}\033[0m\n"; }
+function print_ok(string $msg): void   { echo "  ✔  \033[32m{$msg}\033[0m\n"; }
+function print_err(string $msg): void  { echo "  ✘  \033[31m{$msg}\033[0m\n"; }
 function print_info(string $msg): void { echo "  →  {$msg}\n"; }
 
 // ---------------------------------------------------------------------------
 // Prerequisites
 // ---------------------------------------------------------------------------
-print_section('Moralis BSC API Test');
+print_section('Moralis Multi-Chain API Test');
 
 if (empty($API_KEY)) {
     print_err('MORALIS_API_KEY is not set in .env');
@@ -106,90 +116,96 @@ if (empty($API_KEY)) {
 
 print_ok('API key loaded: ' . substr($API_KEY, 0, 6) . '...' . substr($API_KEY, -4));
 print_info("Base URL : {$BASE_URL}");
-print_info("Chain    : {$CHAIN}");
-print_info("Address  : {$TEST_ADDRESS}");
+print_info("Chains   : " . implode(', ', array_keys($CHAINS_TO_TEST)));
 
 // ---------------------------------------------------------------------------
-// Test 1: Native BNB balance (validates key + chain access)
+// Loop over each chain
 // ---------------------------------------------------------------------------
-print_section('Test 1 — Native BNB Balance');
+$allPassed = true;
 
-$res = moralis_get("/{$TEST_ADDRESS}/balance");
+foreach ($CHAINS_TO_TEST as $chainId => $chainInfo) {
+    $label   = $chainInfo['label'];
+    $symbol  = $chainInfo['native_symbol'];
+    $address = strtolower(explode(',', $chainInfo['address'])[0]); // first address if comma-separated
 
-if (isset($res['__error'])) {
-    print_err($res['__error']);
-    exit(1);
-}
-if ($res['__http'] !== 200) {
-    print_err("HTTP {$res['__http']}: " . ($res['message'] ?? json_encode($res)));
-    exit(1);
-}
+    print_section("Chain: {$label} ({$chainId})  |  Address: {$address}");
 
-$bnb = wei_to_bnb($res['balance'] ?? '0');
-print_ok("HTTP 200 OK");
-print_info("Balance : {$bnb} BNB  (raw: {$res['balance']} wei)");
+    // Test A: Native balance
+    echo "  [A] Native {$symbol} balance\n";
+    $res = moralis_get("/{$address}/balance", $chainId);
 
-// ---------------------------------------------------------------------------
-// Test 2: Last 5 native transactions
-// ---------------------------------------------------------------------------
-print_section('Test 2 — Last 5 Native Transactions');
-
-$res = moralis_get("/{$TEST_ADDRESS}", ['limit' => 5]);
-
-if ($res['__http'] !== 200) {
-    print_err("HTTP {$res['__http']}: " . ($res['message'] ?? ''));
-} elseif (empty($res['result'])) {
-    print_info('No transactions found.');
-} else {
-    print_ok(count($res['result']) . ' transactions returned');
-    foreach ($res['result'] as $i => $tx) {
-        $bnb    = wei_to_bnb($tx['value'] ?? '0');
-        $status = ($tx['receipt_status'] ?? '1') === '1' ? "\033[32mOK\033[0m" : "\033[31mFAILED\033[0m";
-        echo sprintf(
-            "  [%d] Block %-10s  From %-10s  To %-10s  %s BNB  %s\n",
-            $i + 1,
-            $tx['block_number'] ?? '?',
-            substr($tx['from_address'] ?? '', 0, 10) . '...',
-            substr($tx['to_address']   ?? '', 0, 10) . '...',
-            $bnb,
-            $status
-        );
+    if (isset($res['__error'])) {
+        print_err($res['__error']);
+        $allPassed = false;
+        continue;
     }
-}
+    if ($res['__http'] !== 200) {
+        print_err("HTTP {$res['__http']}: " . ($res['message'] ?? json_encode($res)));
+        $allPassed = false;
+        continue;
+    }
 
-// ---------------------------------------------------------------------------
-// Test 3: Last 5 BEP-20 token transfers
-// ---------------------------------------------------------------------------
-print_section('Test 3 — Last 5 BEP-20 Token Transfers');
+    $native = wei_to_native($res['balance'] ?? '0');
+    print_ok("HTTP 200 — Balance: {$native} {$symbol}  (raw: " . ($res['balance'] ?? '0') . " wei)");
 
-$res = moralis_get("/{$TEST_ADDRESS}/erc20/transfers", ['limit' => 5]);
+    // Test B: Last 3 native transactions
+    echo "\n  [B] Last 3 native transactions\n";
+    $res = moralis_get("/{$address}", $chainId, ['limit' => 3]);
 
-if ($res['__http'] !== 200) {
-    print_err("HTTP {$res['__http']}: " . ($res['message'] ?? ''));
-} elseif (empty($res['result'])) {
-    print_info('No token transfers found.');
-} else {
-    print_ok(count($res['result']) . ' token transfers returned');
-    foreach ($res['result'] as $i => $tx) {
-        $decimals = max(1, (int) ($tx['token_decimals'] ?? 18));
-        $amount   = number_format(
-            (float) bcdiv($tx['value'] ?? '0', bcpow('10', (string) $decimals, 0), $decimals),
-            4
-        );
-        echo sprintf(
-            "  [%d] Block %-10s  %s %s  (%s)\n",
-            $i + 1,
-            $tx['block_number']  ?? '?',
-            $amount,
-            $tx['token_symbol']  ?? '?',
-            $tx['token_name']    ?? '?'
-        );
+    if ($res['__http'] !== 200) {
+        print_err("HTTP {$res['__http']}: " . ($res['message'] ?? ''));
+        $allPassed = false;
+    } elseif (empty($res['result'])) {
+        print_info('No native transactions found.');
+    } else {
+        print_ok(count($res['result']) . ' transaction(s) returned');
+        foreach ($res['result'] as $i => $tx) {
+            $val    = wei_to_native($tx['value'] ?? '0');
+            $status = ($tx['receipt_status'] ?? '1') === '1' ? "\033[32mOK\033[0m" : "\033[31mFAIL\033[0m";
+            echo sprintf(
+                "    [%d] Block %-10s  %s → %s  %s %s  %s\n",
+                $i + 1,
+                $tx['block_number'] ?? '?',
+                substr($tx['from_address'] ?? '', 0, 10) . '..',
+                substr($tx['to_address']   ?? '', 0, 10) . '..',
+                $val, $symbol, $status
+            );
+        }
+    }
+
+    // Test C: Last 3 token transfers
+    echo "\n  [C] Last 3 token transfers\n";
+    $res = moralis_get("/{$address}/erc20/transfers", $chainId, ['limit' => 3]);
+
+    if ($res['__http'] !== 200) {
+        print_err("HTTP {$res['__http']}: " . ($res['message'] ?? ''));
+        $allPassed = false;
+    } elseif (empty($res['result'])) {
+        print_info('No token transfers found.');
+    } else {
+        print_ok(count($res['result']) . ' token transfer(s) returned');
+        foreach ($res['result'] as $i => $tx) {
+            $dec    = max(1, (int) ($tx['token_decimals'] ?? 18));
+            $amount = number_format((float) bcdiv($tx['value'] ?? '0', bcpow('10', (string) $dec, 0), $dec), 4);
+            echo sprintf(
+                "    [%d] Block %-10s  %s %s  (%s)\n",
+                $i + 1,
+                $tx['block_number'] ?? '?',
+                $amount,
+                $tx['token_symbol'] ?? '?',
+                $tx['token_name']   ?? '?'
+            );
+        }
     }
 }
 
 // ---------------------------------------------------------------------------
 // Done
 // ---------------------------------------------------------------------------
-print_section('All tests complete');
-print_ok('Moralis API key is valid and working on BSC.');
+print_section('Done');
+if ($allPassed) {
+    print_ok('All chains passed. Moralis API is working correctly.');
+} else {
+    print_err('Some chains had errors (see above).');
+}
 echo "\n";
