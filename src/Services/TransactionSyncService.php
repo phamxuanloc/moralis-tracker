@@ -191,22 +191,34 @@ class TransactionSyncService
             ->flip()
             ->all();
 
-        $newRows = array_filter($rows, fn($r) => !isset($existingHashes[$r['tx_hash']]));
+        $newRows = array_values(
+            array_filter($rows, fn($r) => !isset($existingHashes[$r['tx_hash']]))
+        );
 
-        if (!empty($newRows)) {
-            BscTransaction::insert(array_values($newRows));
+        // Upsert all rows: insert new ones, update existing ones
+        BscTransaction::upsert(
+            array_values($rows),
+            ['tx_hash', 'type', 'tracked_address'],
+            [
+                'block_number', 'block_timestamp', 'transaction_index',
+                'from_address', 'to_address', 'value', 'value_bnb',
+                'gas', 'gas_price', 'gas_used', 'tx_fee_bnb',
+                'nonce', 'input', 'is_error', 'tx_receipt_status',
+                'contract_address', 'token_name', 'token_symbol', 'token_decimal',
+                'raw_data', 'updated_at',
+            ]
+        );
 
-            foreach ($newRows as $row) {
-                Log::channel($this->logChannel)->info('[MoralisTracker] New transaction saved', [
-                    'address' => $trackedAddress,
-                    'type'    => $type,
-                    'hash'    => $row['tx_hash'],
-                    'block'   => $row['block_number'],
-                    'from'    => $row['from_address'],
-                    'to'      => $row['to_address'],
-                    'bnb'     => $row['value_bnb'],
-                ]);
-            }
+        foreach ($newRows as $row) {
+            Log::channel($this->logChannel)->info('[MoralisTracker] New transaction saved', [
+                'address' => $trackedAddress,
+                'type'    => $type,
+                'hash'    => $row['tx_hash'],
+                'block'   => $row['block_number'],
+                'from'    => $row['from_address'],
+                'to'      => $row['to_address'],
+                'bnb'     => $row['value_bnb'],
+            ]);
         }
 
         return count($newRows);

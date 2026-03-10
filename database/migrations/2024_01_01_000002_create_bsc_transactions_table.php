@@ -8,7 +8,7 @@ return new class extends Migration
 {
     public function up(): void
     {
-        $tableName = config('bscscan.table_names.bsc_transactions', 'bsc_transactions');
+        $tableName = config('moralis.table_names.bsc_transactions', 'bsc_transactions');
 
         Schema::create($tableName, function (Blueprint $table) {
             $table->id();
@@ -57,7 +57,7 @@ return new class extends Migration
 
     public function down(): void
     {
-        $tableName = config('bscscan.table_names.bsc_transactions', 'bsc_transactions');
+        $tableName = config('moralis.table_names.bsc_transactions', 'bsc_transactions');
         Schema::dropIfExists($tableName);
     }
 };
