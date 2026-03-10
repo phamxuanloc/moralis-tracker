@@ -108,6 +108,10 @@ php artisan moralis:sync --fresh
 ```php
 protected function schedule(Schedule $schedule): void
 {
+    // Every minute
+    $schedule->command('moralis:sync')->everyMinute();
+
+    // Or every 5 minutes (recommended for free Moralis tier)
     $schedule->command('moralis:sync')->everyFiveMinutes();
 }
 ```
@@ -116,8 +120,19 @@ protected function schedule(Schedule $schedule): void
 ```php
 use Illuminate\Support\Facades\Schedule;
 
+// Every minute
+Schedule::command('moralis:sync')->everyMinute();
+
+// Or every 5 minutes (recommended for free Moralis tier)
 Schedule::command('moralis:sync')->everyFiveMinutes();
 ```
+
+Then make sure your server cron is running:
+```bash
+* * * * * cd /path-to-your-app && php artisan schedule:run >> /dev/null 2>&1
+```
+
+> **Note:** Each sync only fetches transactions **newer than the last synced block**, so running every minute is efficient. Existing transactions are **automatically updated** if their data changes.
 
 ---
 
